@@ -1,0 +1,25 @@
+[[source]]
+name = "pypi"
+url = "https://pypi.org/simple"
+verify_ssl = true
+
+[dev-packages]
+ipykernel = "*"
+
+[packages]
+matplotlib = "*"
+numpy = "*"
+inflect = "*"
+librosa = "*"
+scipy = "*"
+Unidecode = "*"
+Pillow = "*"
+torch = "*"
+pandas = "*"
+tensorboard = "*"
+pyyaml = "*"
+hydra-core = "*"
+transformers = "*"
+
+[requires]
+python_version = "3.9"

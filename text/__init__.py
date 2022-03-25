@@ -2,11 +2,14 @@
 import re
 from text import cleaners
 from text.symbols import symbols
-
+import pyopenjtalk
+from transformers import AutoTokenizer
 
 # Mappings from symbol to numeric ID and vice versa:
 _symbol_to_id = {s: i for i, s in enumerate(symbols)}
 _id_to_symbol = {i: s for i, s in enumerate(symbols)}
+
+tokenizer = AutoTokenizer.from_pretrained("sarulab-speech/png_bert_phoneme", use_auth_token=True)
 
 # Regular expression matching text enclosed in curly braces:
 _curly_re = re.compile(r'(.*?)\{(.+?)\}(.*)')
@@ -72,3 +75,7 @@ def _arpabet_to_sequence(text):
 
 def _should_keep_symbol(s):
   return s in _symbol_to_id and s is not '_' and s is not '~'
+
+def text_to_sequence(text,cleaners= None):
+  encoded = tokenizer(pyopenjtalk.g2p(text,kana=True))
+  return encoded['input_ids']

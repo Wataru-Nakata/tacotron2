@@ -2,3 +2,9 @@
 	path = waveglow
 	url = https://github.com/NVIDIA/waveglow
 	branch = master
+[submodule "external_resources/jsut-lab"]
+	path = external_resources/jsut-lab
+	url = https://github.com/r9y9/jsut-lab
+[submodule "external_resources/pyopenjtalk"]
+	path = external_resources/pyopenjtalk
+	url = https://github.com/r9y9/pyopenjtalk

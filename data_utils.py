@@ -1,9 +1,12 @@
 import random
 import numpy as np
+import pyopenjtalk
 import torch
 import torch.utils.data
+from transformers import AutoTokenizer
 
 import layers
+from pp_symbols import pp_symbols
 from utils import load_wav_to_torch, load_filepaths_and_text
 from text import text_to_sequence
 
@@ -30,7 +33,6 @@ class TextMelLoader(torch.utils.data.Dataset):
     def get_mel_text_pair(self, audiopath_and_text):
         # separate filename and text
         audiopath, text = audiopath_and_text[0], audiopath_and_text[1]
-        text = self.get_text(text)
         mel = self.get_mel(audiopath)
         return (text, mel)
 
@@ -53,9 +55,6 @@ class TextMelLoader(torch.utils.data.Dataset):
 
         return melspec
 
-    def get_text(self, text):
-        text_norm = torch.IntTensor(text_to_sequence(text, self.text_cleaners))
-        return text_norm
 
     def __getitem__(self, index):
         return self.get_mel_text_pair(self.audiopaths_and_text[index])
@@ -67,8 +66,10 @@ class TextMelLoader(torch.utils.data.Dataset):
 class TextMelCollate():
     """ Zero-pads model inputs and targets based on number of frames per setep
     """
-    def __init__(self, n_frames_per_step):
+    def __init__(self, n_frames_per_step,mode='kana'):
         self.n_frames_per_step = n_frames_per_step
+        self.mode = mode
+        self.tokenizer = AutoTokenizer.from_pretrained("sarulab-speech/png_bert_phoneme", use_auth_token=True)
 
     def __call__(self, batch):
         """Collate's training batch from normalized text and mel-spectrogram
@@ -81,12 +82,18 @@ class TextMelCollate():
             torch.LongTensor([len(x[0]) for x in batch]),
             dim=0, descending=True)
         max_input_len = input_lengths[0]
-
-        text_padded = torch.LongTensor(len(batch), max_input_len)
-        text_padded.zero_()
+        texts = []
         for i in range(len(ids_sorted_decreasing)):
-            text = batch[ids_sorted_decreasing[i]][0]
-            text_padded[i, :text.size(0)] = text
+            texts.append(batch[ids_sorted_decreasing[i]][0])
+        if self.mode == 'kana':
+            text_padded = self.tokenizer([list(pyopenjtalk.g2p(t,kana=True)) for t in texts],texts,add_special_tokens=True,truncation=True,is_split_into_words=True,return_tensors='pt',padding=True,max_length=256,return_token_type_ids=True)
+        elif self.mode == 'phoneme':
+            text_padded = self.tokenizer([pyopenjtalk.g2p(t,kana=False).split(" ") for t in texts],[list(t) for t in texts],add_special_tokens=True,truncation=True,is_split_into_words=True,return_tensors='pt',padding=True,max_length=256,return_token_type_ids=True)
+        elif self.mode == 'pp_symbol':
+            text_padded = self.tokenizer([pp_symbols(pyopenjtalk.extract_fullcontext(t)) for t in texts],[list(t) for t in texts],add_special_tokens=True,truncation=True,is_split_into_words=True,return_tensors='pt',padding=True,max_length=256,return_token_type_ids=True)
+        # calc max length and input lengths
+        input_lengths = ((text_padded['token_type_ids']==0)*text_padded['attention_mask']).long().sum(1)
+        max_input_len = input_lengths.max()
 
         # Right zero-pad mel-spec
         num_mels = batch[0][1].size(0)

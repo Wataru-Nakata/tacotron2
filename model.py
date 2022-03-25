@@ -3,8 +3,11 @@ import torch
 from torch.autograd import Variable
 from torch import nn
 from torch.nn import functional as F
+import transformers
+from zmq import device
 from layers import ConvNorm, LinearNorm
 from utils import to_gpu, get_mask_from_lengths
+from transformers import BertModel
 
 
 class LocationLayer(nn.Module):
@@ -154,6 +157,11 @@ class Encoder(nn.Module):
     def __init__(self, hparams):
         super(Encoder, self).__init__()
 
+        self.embedding = nn.Embedding(
+            hparams.n_symbols, hparams.symbols_embedding_dim)
+        std = sqrt(2.0 / (hparams.n_symbols + hparams.symbols_embedding_dim))
+        val = sqrt(3.0) * std  # uniform bounds for std
+        self.embedding.weight.data.uniform_(-val, val)
         convolutions = []
         for _ in range(hparams.encoder_n_convolutions):
             conv_layer = nn.Sequential(
@@ -171,6 +179,16 @@ class Encoder(nn.Module):
                             batch_first=True, bidirectional=True)
 
     def forward(self, x, input_lengths):
+        
+        # only_phoneme = x['input_ids']*(x['token_type_ids'] == 0)
+        
+        input_lengths = ((x['token_type_ids']==0)*x['attention_mask']).long().sum(1)
+        only_phoneme = x['input_ids']*((x['token_type_ids']==0)*x['attention_mask'])
+
+        only_phoneme = only_phoneme[:,:input_lengths.max()]
+
+        x = self.embedding(only_phoneme).transpose(1, 2)
+
         for conv in self.convolutions:
             x = F.dropout(F.relu(conv(x)), 0.5, self.training)
 
@@ -179,7 +197,7 @@ class Encoder(nn.Module):
         # pytorch tensor are not reversible, hence the conversion
         input_lengths = input_lengths.cpu().numpy()
         x = nn.utils.rnn.pack_padded_sequence(
-            x, input_lengths, batch_first=True)
+            x, input_lengths, batch_first=True,enforce_sorted=False)
 
         self.lstm.flatten_parameters()
         outputs, _ = self.lstm(x)
@@ -190,6 +208,15 @@ class Encoder(nn.Module):
         return outputs
 
     def inference(self, x):
+        
+        
+        input_lengths = ((x['token_type_ids']==0)*x['attention_mask']).long().sum(1)
+        only_phoneme = x['input_ids']*((x['token_type_ids']==0)*x['attention_mask'])
+
+        only_phoneme = only_phoneme[:,:input_lengths.max()]
+
+        x = self.embedding(only_phoneme).transpose(1, 2)
+
         for conv in self.convolutions:
             x = F.dropout(F.relu(conv(x)), 0.5, self.training)
 
@@ -201,6 +228,20 @@ class Encoder(nn.Module):
         return outputs
 
 
+class PnGBERTEncoder(nn.Module):
+    def __init__(self,hparams) -> None:
+        assert hparams.use_png_bert == True
+        super().__init__()
+        self.bert = BertModel.from_pretrained(hparams.bert_model,use_auth_token=True)
+    def forward(self, input, input_lengths):
+        input_lengths = ((input['token_type_ids']==0)*input['attention_mask']).long().sum(1)
+        outputs = self.bert(**input)
+        outputs = outputs.last_hidden_state * ((input['token_type_ids'] == 0)*input['attention_mask']).unsqueeze(-1)
+        outputs = outputs[:,:input_lengths.max(),:]
+        print(outputs.size())
+        return outputs
+    def inference(self, x):
+        return self.forward(x)
 class Decoder(nn.Module):
     def __init__(self, hparams):
         super(Decoder, self).__init__()
@@ -466,15 +507,18 @@ class Tacotron2(nn.Module):
         std = sqrt(2.0 / (hparams.n_symbols + hparams.symbols_embedding_dim))
         val = sqrt(3.0) * std  # uniform bounds for std
         self.embedding.weight.data.uniform_(-val, val)
-        self.encoder = Encoder(hparams)
+        if hparams.use_png_bert == True:
+            self.encoder = PnGBERTEncoder(hparams)
+        else:
+            self.encoder = Encoder(hparams)
         self.decoder = Decoder(hparams)
         self.postnet = Postnet(hparams)
 
     def parse_batch(self, batch):
         text_padded, input_lengths, mel_padded, gate_padded, \
             output_lengths = batch
-        text_padded = to_gpu(text_padded).long()
-        input_lengths = to_gpu(input_lengths).long()
+        text_padded = text_padded.to('cuda')
+        input_lengths = to_gpu(input_lengths)
         max_len = torch.max(input_lengths.data).item()
         mel_padded = to_gpu(mel_padded).float()
         gate_padded = to_gpu(gate_padded).float()
@@ -500,9 +544,8 @@ class Tacotron2(nn.Module):
         text_inputs, text_lengths, mels, max_len, output_lengths = inputs
         text_lengths, output_lengths = text_lengths.data, output_lengths.data
 
-        embedded_inputs = self.embedding(text_inputs).transpose(1, 2)
 
-        encoder_outputs = self.encoder(embedded_inputs, text_lengths)
+        encoder_outputs = self.encoder(text_inputs, text_lengths)
 
         mel_outputs, gate_outputs, alignments = self.decoder(
             encoder_outputs, mels, memory_lengths=text_lengths)

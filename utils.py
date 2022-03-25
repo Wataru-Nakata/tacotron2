@@ -1,5 +1,7 @@
 import numpy as np
-from scipy.io.wavfile import read
+import hydra.utils
+import os
+import librosa
 import torch
 
 
@@ -11,12 +13,13 @@ def get_mask_from_lengths(lengths):
 
 
 def load_wav_to_torch(full_path):
-    sampling_rate, data = read(full_path)
+    full_path = os.path.join(hydra.utils.get_original_cwd(),full_path)
+    data,sampling_rate = librosa.load(full_path)
     return torch.FloatTensor(data.astype(np.float32)), sampling_rate
 
 
 def load_filepaths_and_text(filename, split="|"):
-    with open(filename, encoding='utf-8') as f:
+    with open(os.path.join(hydra.utils.get_original_cwd(),filename), encoding='utf-8') as f:
         filepaths_and_text = [line.strip().split(split) for line in f]
     return filepaths_and_text
 
